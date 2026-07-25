@@ -311,15 +311,48 @@ All APIs have **local fallback tables** so the system works fully offline.
 
 ---
 
-## 🎨 Widget System
+## 🎨 Widget System (2 Widgets)
 
-The **Risk Dashboard** widget renders inline in NitroStack Studio when `generate_doctor_report` is called:
+### Widget 1: Risk Dashboard (`/risk-dashboard`)
+Renders inline in NitroStack Studio when `generate_doctor_report` is called:
 
 - **🟢 Green banner** — SAFE TO PRESCRIBE
 - **🟡 Yellow banner** — PROCEED WITH CAUTION
 - **🔴 Red banner** — HIGH RISK — REVIEW REQUIRED
 
-Built with `@nitrostack/widgets` SDK:
+### Widget 2: 🧠 AI Thinking Trace (`/agent-trace`) — Explainable AI
+Renders inline when `aggregate_risk_score` is called. Shows an **animated step-by-step visualization** of the AI's multi-agent decision pipeline:
+
+- Each tool call appears as an animated block (staggered 400ms entrance)
+- **Color-coded by agent**: 🏥 Purple (Patient) · 🛡️ Blue (Safety) · 🌿 Green (AYUSH) · 📊 Amber (Report)
+- Each block shows: tool name, agent name, pass/fail status, detail, and source citation
+- Judges see EXACTLY what the AI checked and why — **zero black box**
+
+```
+┌──────────────────────────────────────────────────┐
+│  🧠 AI THINKING TRACE                            │
+│  Multi-Agent Safety Pipeline                      │
+│                                                   │
+│  🏥 Patient Profile Loaded              🟢 PASSED │
+│  Safety Agent → get_patient_profile               │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
+│  🛡️ Drug-Drug Interaction              🔴 MAJOR  │
+│  Safety Agent → check_drug_drug_interaction       │
+│  Ibuprofen + Lisinopril — reduces BP effect       │
+│  📎 U.S. FDA Drug Label Database (OpenFDA)        │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
+│  🌿 AYUSH Herb-Drug Interaction        🟡 FLAGGED│
+│  AYUSH Agent → check_ayush_interaction            │
+│  Ashwagandha × Metformin — hypoglycemia risk      │
+│  📎 Indian Journal of Pharmacology, 2019          │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
+│  📊 Risk Aggregation                   🔴 HIGH   │
+│  Report Agent → aggregate_risk_score              │
+│  3 concern(s) flagged → HIGH RISK                 │
+└──────────────────────────────────────────────────┘
+```
+
+Both widgets use `@nitrostack/widgets` SDK:
 - `useWidgetSDK()` — Access tool output data
 - `useTheme()` — Dark/light mode support
 - `useWidgetState()` — Persistent expand/collapse state
@@ -350,29 +383,37 @@ Then open **NitroStack Studio** → point to this project → try:
 ## 🧰 Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|-----------| 
 | **Framework** | NitroStack (`@nitrostack/core`) — Decorator-based MCP |
+| **Architecture** | Multi-Agent (4 specialized agents) |
 | **Language** | TypeScript (strict mode, ESM) |
 | **LLM** | Google Gemini 2.0 Flash (entity extraction + reports) |
 | **Drug Interactions** | OpenFDA `/drug/label` API |
 | **Drug Classification** | RxNorm REST API (NIH, free, no key required) |
+| **AYUSH Database** | Custom herb-drug interaction table (12 entries) |
 | **Validation** | Zod schemas on every tool input |
-| **Widgets** | Next.js 14 + `@nitrostack/widgets` SDK |
+| **Widgets** | Next.js 14 + `@nitrostack/widgets` SDK (2 widgets) |
 | **Transport** | STDIO (dev) / STDIO + HTTP SSE (production) |
 
 ---
 
 ## 📁 Key Design Decisions
 
-1. **Rule-based + LLM hybrid**: Clinical safety checks use deterministic rule-based logic (no hallucination risk). LLM is only used for natural language understanding and report formatting.
+1. **Multi-Agent Architecture**: 15 tools split into 4 specialized agents (Patient, Safety, AYUSH, Report). Reduces LLM context overhead and enables independent scaling.
 
-2. **Graceful degradation**: Every external API call (Gemini, OpenFDA, RxNorm) has a local fallback table. System works fully offline.
+2. **Rule-based + LLM hybrid**: Clinical safety checks use deterministic rule-based logic (no hallucination risk). LLM is only used for natural language understanding and report formatting.
 
-3. **Parallel execution**: All 7 safety checks run simultaneously, then aggregate. No sequential bottleneck.
+3. **Graceful degradation**: Every external API call (Gemini, OpenFDA, RxNorm) has a local fallback table. System works fully offline.
 
-4. **Re-check alternatives**: `find_and_rank_alternatives` doesn't just suggest drugs — it re-runs ALL safety checks on each candidate and ranks by score.
+4. **Explainable AI**: Every safety flag includes a source citation. The Agent Trace widget visualizes the entire decision pipeline — zero black box.
 
-5. **Mock EHR**: `patients.json` simulates an EHR database with clinically realistic profiles designed to demonstrate different risk scenarios.
+5. **India-localized AYUSH Agent**: Covers Ayurvedic herb × Allopathic drug interactions that no Western API tracks — critical for Indian patients.
+
+6. **Parallel execution**: All 8 safety checks (including AYUSH) run simultaneously, then aggregate. No sequential bottleneck.
+
+7. **Re-check alternatives**: `find_and_rank_alternatives` doesn't just suggest drugs — it re-runs ALL safety checks on each candidate and ranks by score.
+
+8. **File Upload Ingestion**: Patients can be loaded from .txt, .csv, .pdf, .docx files — Gemini LLM extracts structured profiles with regex fallback.
 
 ---
 

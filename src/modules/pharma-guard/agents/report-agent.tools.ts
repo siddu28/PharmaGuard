@@ -48,6 +48,7 @@ export class ReportAgent {
       }
     }
   })
+  @Widget('agent-trace')
   async aggregateRiskScore(
     input: { checks: Array<{ type: string; flagged: boolean; severity?: string; detail?: string; citation?: string }> },
     ctx: ExecutionContext
@@ -77,6 +78,8 @@ export class ReportAgent {
       totalChecks: input.checks.length,
       flaggedChecks,
       recommendation,
+      // Pass ALL checks (not just flagged) for the Agent Trace widget
+      _traceInput: input.checks,
     };
   }
 
