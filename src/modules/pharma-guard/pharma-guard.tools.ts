@@ -26,6 +26,14 @@ function loadPatients() {
 }
 
 /**
+ * In-memory patient store for LLM-extracted patients.
+ * Patients added via ingest_patient_record are stored here
+ * and accessible to get_patient_profile alongside the demo patients.
+ */
+const inMemoryPatients: Map<string, any> = new Map();
+let nextPatientCounter = 100; // Auto-generated IDs start at P100
+
+/**
  * Call Gemini API for LLM tasks.
  * Returns null on failure (quota exceeded, network error, etc.) so callers can fall back.
  */
@@ -94,11 +102,22 @@ export class PharmaGuardTools {
   async getPatientProfile(input: { patientId: string }, ctx: ExecutionContext) {
     ctx.logger.info('Fetching patient profile', { patientId: input.patientId });
 
+    // Check in-memory store first (LLM-extracted patients)
+    if (inMemoryPatients.has(input.patientId)) {
+      ctx.logger.info('Found patient in memory (extracted from unstructured data)', { patientId: input.patientId });
+      return inMemoryPatients.get(input.patientId);
+    }
+
+    // Fall back to demo patients from JSON file
     const patients = loadPatients();
     const patient = patients.find((p: any) => p.id === input.patientId);
 
     if (!patient) {
-      throw new Error(`Patient not found: ${input.patientId}. Available IDs: P001, P002, P003`);
+      // List all available IDs (demo + in-memory)
+      const demoIds = patients.map((p: any) => p.id);
+      const memoryIds = Array.from(inMemoryPatients.keys());
+      const allIds = [...demoIds, ...memoryIds];
+      throw new Error(`Patient not found: ${input.patientId}. Available IDs: ${allIds.join(', ')}`);
     }
 
     return patient;
@@ -1013,6 +1032,244 @@ ${flagged.length > 0
       categoryDescription: categoryDescriptions[category] ?? categoryDescriptions['unknown'],
       note: `${input.newDrug} is FDA Pregnancy Category ${category} — ${categoryDescriptions[category] ?? categoryDescriptions['unknown']}`,
       recommendation,
+    };
+  }
+
+  // ==========================================================================
+  // Tool 13: ingest_patient_record (File Upload / Text → Structured Patient JSON)
+  // ==========================================================================
+  @Tool({
+    name: 'ingest_patient_record',
+    description: `Upload a patient record file (.txt, .csv, .pdf, .docx) or paste unstructured clinical text to extract a structured patient profile. The file is decoded, text is extracted, and Gemini LLM converts it into the same JSON format used by all PharmaGuard safety tools. The patient is stored in memory with an assigned ID for immediate use in safety checks. Supported formats: plain text, CSV, PDF (text-based), DOCX.`,
+    inputSchema: z.object({
+      file_name: z.string().optional().describe('Name of the uploaded file (e.g., "patient_record.txt")'),
+      file_type: z.string().optional().describe('MIME type of the uploaded file (e.g., "text/plain", "text/csv", "application/pdf")'),
+      file_content: z.string().optional().describe('Base64-encoded file content (provided automatically by NitroStack Studio when a file is attached)'),
+      clinicalText: z.string().optional().describe('Alternative: raw clinical text instead of a file upload'),
+      patientId: z.string().optional().describe('Optional custom patient ID. If not provided, one will be auto-generated (P100, P101, etc.)'),
+    }),
+    examples: {
+      request: {
+        file_name: 'patient_record.txt',
+        file_type: 'text/plain',
+        file_content: 'UGF0aWVudDogTXJzLiBBbml0YSBEZXNhaSwgNDUteWVhci1vbGQgZmVtYWxlLCB3ZWlnaGluZyA2MiBrZy4=',
+      },
+      response: {
+        success: true,
+        patientId: 'P100',
+        fileName: 'patient_record.txt',
+        extractedProfile: {
+          id: 'P100',
+          name: 'Mrs. Anita Desai',
+          age: 45,
+          sex: 'female',
+        },
+        source: 'file_upload → llm_extraction',
+      },
+    },
+  })
+  async ingestPatientRecord(input: { file_name?: string; file_type?: string; file_content?: string; clinicalText?: string; patientId?: string }, ctx: ExecutionContext) {
+    ctx.logger.info('Ingesting patient record', {
+      fileName: input.file_name,
+      fileType: input.file_type,
+      hasFileContent: !!input.file_content,
+      hasText: !!input.clinicalText,
+    });
+
+    // Step 1: Extract text from file or use raw clinicalText
+    let extractedText = '';
+
+    if (input.file_content) {
+      // Decode base64 file content
+      ctx.logger.info('Decoding uploaded file', { fileName: input.file_name, fileType: input.file_type });
+
+      let buffer: Buffer;
+      const b64 = input.file_content;
+      // Handle both data URL format and raw base64
+      const dataUrlMatch = b64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+      if (dataUrlMatch && dataUrlMatch.length === 3) {
+        buffer = Buffer.from(dataUrlMatch[2], 'base64');
+      } else {
+        buffer = Buffer.from(b64, 'base64');
+      }
+
+      const mimeType = input.file_type || '';
+      const fileName = (input.file_name || '').toLowerCase();
+
+      // Extract text based on file type
+      if (mimeType.startsWith('text/') || fileName.endsWith('.txt') || fileName.endsWith('.csv')) {
+        // Plain text or CSV — decode directly to UTF-8
+        extractedText = buffer.toString('utf-8');
+        ctx.logger.info('Extracted text from text file', { chars: extractedText.length });
+
+      } else if (mimeType === 'application/pdf' || fileName.endsWith('.pdf')) {
+        // PDF — extract printable text from raw buffer (basic extraction without external deps)
+        // Extracts text between stream markers and readable ASCII sequences
+        const rawText = buffer.toString('utf-8', 0, Math.min(buffer.length, 500000));
+        // Pull readable ASCII sequences (words, numbers, punctuation)
+        const textChunks = rawText.match(/[A-Za-z0-9\s.,;:!?()\-\/'"@#$%&*+=\[\]{}|\\^~`]{4,}/g) || [];
+        extractedText = textChunks.join(' ').replace(/\s+/g, ' ').trim();
+        ctx.logger.info('Extracted text from PDF (basic)', { chars: extractedText.length });
+
+        if (extractedText.length < 50) {
+          extractedText = `[PDF file uploaded: ${input.file_name}. The PDF may be image-based and text extraction was limited. Raw content length: ${buffer.length} bytes. Please provide patient data as plain text for best results.]`;
+        }
+
+      } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
+        // DOCX — extract text from XML content within the ZIP
+        // DOCX is a ZIP containing word/document.xml — extract text between XML tags
+        const rawText = buffer.toString('utf-8', 0, Math.min(buffer.length, 500000));
+        const xmlTextMatches = rawText.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || [];
+        extractedText = xmlTextMatches
+          .map(match => match.replace(/<[^>]+>/g, ''))
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        ctx.logger.info('Extracted text from DOCX (basic)', { chars: extractedText.length });
+
+        if (extractedText.length < 50) {
+          // Fallback: try to extract any readable text
+          const textChunks = rawText.match(/[A-Za-z0-9\s.,;:!?()\-\/'"]{6,}/g) || [];
+          extractedText = textChunks.join(' ').replace(/\s+/g, ' ').trim();
+        }
+
+      } else {
+        // Unknown format — try to read as text
+        extractedText = buffer.toString('utf-8');
+        ctx.logger.warn('Unknown file type, attempting text decode', { mimeType, fileName: input.file_name });
+      }
+
+    } else if (input.clinicalText) {
+      extractedText = input.clinicalText;
+    } else {
+      throw new Error('No input provided. Either attach a file (.txt, .csv, .pdf, .docx) or provide clinicalText.');
+    }
+
+    if (extractedText.trim().length < 10) {
+      throw new Error('Could not extract meaningful text from the input. Please check the file content or provide clinical text directly.');
+    }
+
+    const assignedId = input.patientId || `P${nextPatientCounter++}`;
+
+    // Step 2: Send extracted text to Gemini for structured extraction
+    const prompt = `You are a clinical data extraction system. Extract a structured patient profile from the following unstructured clinical text.
+
+RETURN ONLY a valid JSON object with this exact schema (no markdown, no explanation):
+{
+  "id": "${assignedId}",
+  "name": "<patient full name or 'Unknown' if not found>",
+  "age": <number or 0 if unknown>,
+  "weightKg": <number or 70 as default>,
+  "sex": "<male|female|unknown>",
+  "pregnancyStatus": "<pregnant_trimester1|pregnant_trimester2|pregnant_trimester3|not_pregnant|not_applicable>",
+  "labResults": {
+    "creatinineClearance_mLmin": <number or 90 as default>,
+    "liverEnzymesALT_UL": <number or 30 as default>
+  },
+  "diagnoses": ["<diagnosis1>", "<diagnosis2>"],
+  "allergies": ["<allergy1>", "<allergy2>"],
+  "currentMedications": [
+    { "name": "<drug>", "dosage": "<dose>", "frequency": "<freq>" }
+  ]
+}
+
+Extraction rules:
+- Extract ALL medications mentioned with their dosages and frequencies
+- Extract ALL allergies mentioned
+- Extract ALL diagnoses/conditions mentioned
+- If creatinine clearance is not directly stated but serum creatinine is given, estimate CrCl using Cockcroft-Gault formula
+- If pregnancy status is not mentioned, use "not_applicable" for males and "not_pregnant" for females
+- Use reasonable clinical defaults for missing lab values
+- Normalize drug names to their common generic names
+
+CLINICAL TEXT:
+${extractedText}
+
+JSON ONLY:`;
+
+    const response = await callGemini(prompt);
+
+    let extractedProfile: any;
+
+    if (response) {
+      try {
+        const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        extractedProfile = JSON.parse(cleaned);
+        // Ensure the ID matches
+        extractedProfile.id = assignedId;
+      } catch (parseError) {
+        ctx.logger.error('Failed to parse LLM extraction response', { response });
+        extractedProfile = null;
+      }
+    }
+
+    // Fallback: basic regex extraction if LLM fails
+    if (!extractedProfile) {
+      ctx.logger.warn('LLM unavailable or failed, using basic text extraction');
+      const text = extractedText;
+
+      // Try to extract name
+      const nameMatch = text.match(/(?:patient|name|pt)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/i);
+      // Try to extract age
+      const ageMatch = text.match(/(\d{1,3})[-\s]*(?:year|yr|y\/o|yo)/i);
+      // Try to extract weight
+      const weightMatch = text.match(/(\d{2,3})\s*kg/i);
+      // Try to extract sex
+      const sexMatch = text.match(/\b(male|female|man|woman)\b/i);
+      // Try to extract allergies
+      const allergyMatch = text.match(/allerg(?:y|ies)[:\s]+([^.\n]+)/i);
+      // Try to extract diagnoses
+      const diagnosisMatch = text.match(/diagnos(?:is|es|ed)[:\s]+([^.\n]+)/i);
+      // Try to extract CrCl
+      const crclMatch = text.match(/(?:creatinine clearance|CrCl|GFR)[:\s]*(\d+)/i);
+
+      const sex = sexMatch ? (sexMatch[1].toLowerCase().includes('female') || sexMatch[1].toLowerCase().includes('woman') ? 'female' : 'male') : 'unknown';
+
+      extractedProfile = {
+        id: assignedId,
+        name: nameMatch?.[1] || 'Unknown Patient',
+        age: ageMatch ? parseInt(ageMatch[1]) : 0,
+        weightKg: weightMatch ? parseInt(weightMatch[1]) : 70,
+        sex,
+        pregnancyStatus: sex === 'male' ? 'not_applicable' : 'not_pregnant',
+        labResults: {
+          creatinineClearance_mLmin: crclMatch ? parseInt(crclMatch[1]) : 90,
+          liverEnzymesALT_UL: 30,
+        },
+        diagnoses: diagnosisMatch ? diagnosisMatch[1].split(/[,;]/).map((d: string) => d.trim()).filter(Boolean) : [],
+        allergies: allergyMatch ? allergyMatch[1].split(/[,;]/).map((a: string) => a.trim()).filter(Boolean) : [],
+        currentMedications: [],
+        _extractionSource: 'basic_regex_fallback',
+      };
+    }
+
+    // Store in memory
+    inMemoryPatients.set(assignedId, extractedProfile);
+
+    ctx.logger.info('Patient record ingested successfully', {
+      patientId: assignedId,
+      name: extractedProfile.name,
+      medicationCount: extractedProfile.currentMedications?.length || 0,
+      diagnosisCount: extractedProfile.diagnoses?.length || 0,
+      allergyCount: extractedProfile.allergies?.length || 0,
+    });
+
+    return {
+      success: true,
+      patientId: assignedId,
+      fileName: input.file_name || null,
+      fileType: input.file_type || null,
+      extractedTextLength: extractedText.length,
+      extractedProfile,
+      source: input.file_content
+        ? (response ? 'file_upload → llm_extraction' : 'file_upload → regex_fallback')
+        : (response ? 'text_input → llm_extraction' : 'text_input → regex_fallback'),
+      message: `Patient ${extractedProfile.name} (${assignedId}) has been registered. You can now run safety checks using this patient ID.`,
+      availableNextSteps: [
+        `get_patient_profile with patientId: "${assignedId}"`,
+        `check_drug_drug_interaction with the patient's current medications`,
+        `Full safety workflow via the medication_safety_check prompt`,
+      ],
     };
   }
 }
