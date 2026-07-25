@@ -1,0 +1,40 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "uri": "/risk-dashboard",
+      "name": "PharmaGuard Risk Dashboard",
+      "description": "Displays the clinical safety report with color-coded risk level, patient info, and expandable report body",
+      "examples": [
+        {
+          "name": "High Risk Example",
+          "description": "Ibuprofen for Mr. Sharma — drug interaction + elderly flag",
+          "data": {
+            "report": "**Overall Verdict:** DO NOT PRESCRIBE without review.\n\n**Concerns Found:**\n- Drug-drug interaction (MAJOR): Ibuprofen + Lisinopril — NSAIDs reduce antihypertensive effect of ACE inhibitors\n- Elderly patient (age 65): Consider reduced starting dose per Beers Criteria\n\n**Recommendation:** Consider Acetaminophen as a safer alternative for pain management.",
+            "metadata": {
+              "patient": "Mr. Sharma",
+              "proposedDrug": "Ibuprofen 400mg",
+              "overallRisk": "high_risk",
+              "generatedAt": "2026-07-25T12:00:00.000Z"
+            }
+          }
+        },
+        {
+          "name": "Safe Example",
+          "description": "Acetaminophen for Ms. Fernandez — no safety concerns",
+          "data": {
+            "report": "**Overall Verdict:** SAFE TO PRESCRIBE.\n\nNo safety concerns identified. Acetaminophen (Category B) is generally considered safe during pregnancy at standard doses.\n\n**Recommendation:** Proceed with standard prescribing guidelines.",
+            "metadata": {
+              "patient": "Ms. Fernandez",
+              "proposedDrug": "Acetaminophen 500mg",
+              "overallRisk": "safe",
+              "generatedAt": "2026-07-25T12:00:00.000Z"
+            }
+          }
+        }
+      ],
+      "tags": ["pharma-guard", "clinical", "safety", "report"]
+    }
+  ],
+  "generatedAt": "2026-07-25T12:00:00.000Z"
+}
