@@ -13,7 +13,7 @@ Medical errors kill **~98,000 people annually** in the US alone. Drug-drug inter
 
 ---
 
-## 🏗️ Architecture Overview
+## 🏗️ Multi-Agent Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -25,29 +25,44 @@ Medical errors kill **~98,000 people annually** in the US alone. Drug-drug inter
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    PharmaGuard MCP Server                        │
+│              ┌──── Multi-Agent Orchestration ────┐               │
+│              │                                   │               │
+│  ┌───────────▼───────────┐  ┌────────────────────▼───────────┐  │
+│  │  🏥 Patient Agent      │  │  🛡️ Safety Agent               │  │
+│  │                        │  │                                │  │
+│  │  • get_patient_profile │  │  • extract_clinical_entities   │  │
+│  │  • ingest_patient_     │  │  • check_drug_drug_interaction │  │
+│  │    record (file upload)│  │  • check_drug_allergy_conflict │  │
+│  │                        │  │  • check_disease_conflict      │  │
+│  │  2 tools               │  │  • check_age_appropriateness   │  │
+│  └────────────────────────┘  │  • check_renal_dose_adjustment │  │
+│                               │  • check_pregnancy_safety      │  │
+│  ┌────────────────────────┐  │  • check_duplicate_therapy     │  │
+│  │  🌿 AYUSH Agent  🇮🇳    │  │  • find_and_rank_alternatives │  │
+│  │                        │  │                                │  │
+│  │  • check_ayush_        │  │  9 tools                      │  │
+│  │    interaction          │  └────────────────────────────────┘  │
+│  │                        │                                      │
+│  │  1 tool (India-local)  │  ┌────────────────────────────────┐  │
+│  └────────────────────────┘  │  📊 Report Agent               │  │
+│                               │                                │  │
+│                               │  • aggregate_risk_score        │  │
+│                               │  • generate_doctor_report      │  │
+│                               │    ↳ @Widget('risk-dashboard') │  │
+│                               │                                │  │
+│                               │  2 tools                      │  │
+│                               └────────────────────────────────┘  │
 │                                                                  │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │  @Resource   │  │   @Prompt     │  │       @Tool (x12)      │  │
-│  │  Patient DB  │  │  Workflow     │  │  Safety Check Engine   │  │
-│  └──────┬──────┘  └──────┬───────┘  └────────────┬───────────┘  │
-│         │                │                        │              │
-│         ▼                ▼                        ▼              │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                  Clinical Data Layer                         │ │
-│  │  patients.json  ·  clinical-tables.ts  ·  6 lookup tables   │ │
+│  │                  Shared Clinical Data Layer                   │ │
+│  │  patients.json · clinical-tables.ts · AYUSH DB · 7 tables   │ │
 │  └─────────────────────────────────────────────────────────────┘ │
-│         │                                        │               │
-│         │              ┌─────────────────────────┤               │
+│         │              │                         │               │
 │         ▼              ▼                         ▼               │
 │  ┌────────────┐  ┌───────────┐  ┌─────────────────────────────┐ │
 │  │ Gemini API │  │ OpenFDA   │  │       RxNorm (NIH)          │ │
 │  │ (LLM)      │  │ (Drug DB) │  │  (Drug Classification)     │ │
 │  └────────────┘  └───────────┘  └─────────────────────────────┘ │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │              @Widget — Risk Dashboard (Next.js)              │ │
-│  │  Color-coded report card rendered inline in Studio chat      │ │
-│  └─────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -131,6 +146,7 @@ my-server/
 ├── package.json                        # NitroStack + dependencies
 ├── tsconfig.json                       # TypeScript config
 ├── README.md                           # This file
+├── sample_patient_record.txt           # Demo file for upload testing
 │
 ├── src/
 │   ├── index.ts                        # Server bootstrap (@McpApp)
@@ -140,13 +156,20 @@ my-server/
 │   │
 │   ├── modules/
 │   │   └── pharma-guard/
-│   │       ├── pharma-guard.module.ts  # Module registration
-│   │       ├── pharma-guard.tools.ts   # 12 MCP tools (core logic)
+│   │       ├── pharma-guard.module.ts  # Module — registers all 4 agents
+│   │       ├── shared-utils.ts         # Shared: Gemini API, patient store
 │   │       ├── pharma-guard.resources.ts # Patient data resources
 │   │       ├── pharma-guard.prompts.ts # Workflow prompt templates
+│   │       │
+│   │       ├── agents/                 # ⭐ Multi-Agent Architecture
+│   │       │   ├── patient-agent.tools.ts   # 🏥 Patient Agent (2 tools)
+│   │       │   ├── safety-agent.tools.ts    # 🛡️ Safety Agent (9 tools)
+│   │       │   ├── ayush-agent.tools.ts     # 🌿 AYUSH Agent (1 tool, India)
+│   │       │   └── report-agent.tools.ts    # 📊 Report Agent (2 tools)
+│   │       │
 │   │       └── data/
-│   │           ├── patients.json       # 3 mock EHR patient profiles
-│   │           └── clinical-tables.ts  # 6 clinical lookup tables
+│   │           ├── patients.json       # 3 EHR patient profiles + herbal remedies
+│   │           └── clinical-tables.ts  # 7 clinical lookup tables + AYUSH DB
 │   │
 │   └── widgets/
 │       ├── widget-manifest.json        # Widget registration
@@ -160,34 +183,75 @@ my-server/
 
 ---
 
-## 🔧 All 12 MCP Tools
+## 🔧 All 15 MCP Tools
 
 ### Tier 1 — Core Safety Pipeline
 
-| # | Tool | Input | Output | Data Source |
-|---|------|-------|--------|-------------|
-| 1 | `get_patient_profile` | `patientId` | Full clinical profile (demographics, labs, meds, allergies) | `patients.json` |
-| 2 | `extract_clinical_entities` | Natural language text | Structured JSON: `{drugName, dosage, frequency, reason}` | **Gemini LLM** (+ regex fallback) |
-| 3 | `check_drug_drug_interaction` | `newDrug` + `currentMedications[]` | Interaction list with severity + clinical context | **OpenFDA API** + local fallback table |
-| 4 | `check_drug_allergy_conflict` | `newDrug` + `allergies[]` | Direct match + cross-reactivity check (e.g., Amoxicillin ↔ Penicillin) | Allergy cross-reactivity table |
-| 5 | `check_disease_conflict` | `newDrug` + `diagnoses[]` | Contraindication flags with detail | Contraindication table |
-| 6 | `check_age_appropriateness` | `newDrug` + `patientAge` | Beers Criteria flags for elderly/pediatric | Rule-based thresholds |
-| 7 | `aggregate_risk_score` | All check results | `{overallRisk, riskScore, flaggedChecks[]}` — safe/caution/high_risk | Weighted scoring algorithm |
-| 8 | `generate_doctor_report` | Patient + risk data | Professional clinical report with verdict + recommendations | **Gemini LLM** (+ template fallback) |
+| # | Tool | Input | Output | Data Source | Citation |
+|---|------|-------|--------|-------------|----------|
+| 1 | `get_patient_profile` | `patientId` | Full clinical profile (demographics, labs, meds, allergies, **herbal remedies**) | `patients.json` + in-memory store | Patient EHR |
+| 2 | `extract_clinical_entities` | Natural language text | Structured JSON: `{drugName, dosage, frequency, reason}` | **Gemini LLM** (+ regex fallback) | — |
+| 3 | `check_drug_drug_interaction` | `newDrug` + `currentMedications[]` | Interaction list with severity + clinical context | **OpenFDA API** + local fallback table | OpenFDA Drug Label DB |
+| 4 | `check_drug_allergy_conflict` | `newDrug` + `allergies[]` | Direct match + cross-reactivity check | Allergy cross-reactivity table | Immunology & Allergy Clinics of North America |
+| 5 | `check_disease_conflict` | `newDrug` + `diagnoses[]` | Contraindication flags with detail | Contraindication table | FDA Drug Label; Clinical Pharmacology Guidelines |
+| 6 | `check_age_appropriateness` | `newDrug` + `patientAge` | Beers Criteria flags for elderly/pediatric | Rule-based thresholds | **AGS Beers Criteria® (2023 Update)** |
+| 7 | `aggregate_risk_score` | All check results | `{overallRisk, riskScore, flaggedChecks[]}` | Weighted scoring algorithm | — |
+| 8 | `generate_doctor_report` | Patient + risk data | Professional clinical report with **[Source]** tags | **Gemini LLM** (+ template fallback) | All citations aggregated |
 
 ### Tier 2 — Advanced Checks
 
-| # | Tool | Input | Output | Data Source |
-|---|------|-------|--------|-------------|
-| 9 | `check_duplicate_therapy` | `newDrug` + `currentMeds[]` | Same-class detection (e.g., Aspirin + Warfarin = both anticoagulants) | **RxNorm API** + local drug class table |
-| 10 | `check_renal_dose_adjustment` | `newDrug` + `creatinineClearance` | CKD staging (1-5) + dose adjustment recommendation | Rule-based CKD thresholds |
-| 11 | `find_and_rank_alternatives` | `unsafeDrug` + `patientId` | Ranked alternatives with safety scores (re-runs all checks per candidate) | **RxNorm API** + safety re-check |
+| # | Tool | Input | Output | Data Source | Citation |
+|---|------|-------|--------|-------------|----------|
+| 9 | `check_duplicate_therapy` | `newDrug` + `currentMeds[]` | Same-class detection | **RxNorm API** + local table | NIH RxNorm Drug Classification API |
+| 10 | `check_renal_dose_adjustment` | `newDrug` + `creatinineClearance` | CKD staging (1-5) + dose adjustment | Rule-based CKD thresholds | **KDIGO Clinical Practice Guidelines (2024)** |
+| 11 | `find_and_rank_alternatives` | `unsafeDrug` + `patientId` | Ranked alternatives with safety scores | **RxNorm API** + safety re-check | — |
 
-### Tier 3 — Specialized
+### Tier 3 — Specialized & India-Localized 🇮🇳
 
-| # | Tool | Input | Output | Data Source |
-|---|------|-------|--------|-------------|
-| 12 | `check_pregnancy_safety` | `newDrug` + `pregnancyStatus` | FDA Category (A/B/C/D/X) + contraindication flag + recommendation | FDA pregnancy category table |
+| # | Tool | Input | Output | Data Source | Citation |
+|---|------|-------|--------|-------------|----------|
+| 12 | `check_pregnancy_safety` | `newDrug` + `pregnancyStatus` | FDA Category (A/B/C/D/X) | FDA pregnancy category table | **FDA Pregnancy Risk Categories; Briggs 12th Ed** |
+| 13 | **`check_ayush_interaction`** 🌿 | `newDrug` + `herbalRemedies[]` | Herb-drug interaction flags with citations | **AYUSH Interaction DB** (12 entries) | Indian Journal of Pharmacology; AYUSH Ministry |
+| 14 | `ingest_patient_record` | File upload (.txt/.csv/.pdf/.docx) or raw text | Structured patient JSON | **Gemini LLM** + regex fallback | — |
+
+---
+
+## 🌿 AYUSH Herb-Drug Interaction System (India-Localized)
+
+> *"Standard APIs only protect patients in the West. We localized our MCP agent to protect Indian patients who frequently mix Allopathic and Ayurvedic treatments."*
+
+PharmaGuard includes a **custom AYUSH interaction database** that cross-references Western (Allopathic) drugs against common Indian herbal remedies — **a gap that OpenFDA, RxNorm, and all Western drug databases leave unaddressed.**
+
+### Covered Herbs & Key Interactions
+
+| Herb | Interacting Drugs | Severity | Effect |
+|------|-------------------|----------|--------|
+| 🌿 **Ashwagandha** | Diazepam, Levothyroxine, Metformin | Major/Moderate | Sedation, thyroid storm, hypoglycemia |
+| 🌿 **Triphala** | Warfarin, Metformin | Major/Moderate | Bleeding risk, hypoglycemia |
+| 🌿 **Guggul** | Warfarin, Atorvastatin | Major/Moderate | Reduced anticoagulation, liver stress |
+| 🌿 **Tulsi** | Aspirin, Diazepam | Moderate | Bleeding risk, excessive sedation |
+| 🌿 **Brahmi** | Donepezil | Moderate | Cholinergic overload |
+| 🌿 **Arjuna** | Atenolol | Moderate | Bradycardia |
+| 🌿 **Neem** | Metformin | Moderate | Hypoglycemia |
+
+Each interaction includes **mechanism of action**, **clinical recommendation**, and **published citation** for full doctor trust.
+
+---
+
+## 📑 Source Citations & Explainable AI
+
+Every safety flag in PharmaGuard includes a **citation** tracing back to the exact data source. This makes the system fully transparent and trustworthy for doctors.
+
+| Check Type | Citation Source |
+|-----------|---------------|
+| Drug-Drug Interaction | U.S. FDA Drug Label Database (OpenFDA) |
+| Allergy Cross-Reactivity | Immunology & Allergy Clinics of North America |
+| Disease Contraindication | FDA Drug Label; Clinical Pharmacology & Therapeutics Guidelines |
+| Age Appropriateness | **AGS Beers Criteria® (American Geriatrics Society, 2023)** |
+| Renal Dose Adjustment | **KDIGO Clinical Practice Guidelines (2024)** |
+| Duplicate Therapy | NIH RxNorm Drug Classification API |
+| Pregnancy Safety | **FDA Pregnancy Risk Categories; Briggs, Freeman & Yaffe 12th Ed** |
+| AYUSH Herb-Drug | Indian Journal of Pharmacology; AYUSH Ministry; JAIM; CCRAS |
 
 ---
 
@@ -201,6 +265,7 @@ my-server/
 | `PREGNANCY_CATEGORY_TABLE` | FDA risk categories A through X | 12 drugs |
 | `LOCAL_DRUG_CLASSES` | Therapeutic class groupings (RxNorm fallback) | 17 drugs |
 | `ALTERNATIVE_DRUGS` | Safer replacement suggestions per drug | 9 drugs |
+| **`AYUSH_INTERACTION_TABLE`** 🌿 | Ayurvedic herb × Allopathic drug interactions | **12 interactions** |
 
 ---
 

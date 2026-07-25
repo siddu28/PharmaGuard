@@ -15,7 +15,8 @@
       "allergies": ["Penicillin"],
       "currentMedications": [
         { "name": "Lisinopril", "dosage": "10mg", "frequency": "daily" }
-      ]
+      ],
+      "herbalRemedies": ["Ashwagandha", "Triphala"]
     },
     {
       "id": "P002",
@@ -30,7 +31,8 @@
       },
       "diagnoses": ["Migraine"],
       "allergies": [],
-      "currentMedications": []
+      "currentMedications": [],
+      "herbalRemedies": ["Tulsi"]
     },
     {
       "id": "P003",
@@ -48,7 +50,8 @@
       "currentMedications": [
         { "name": "Warfarin", "dosage": "5mg", "frequency": "daily" },
         { "name": "Metoprolol", "dosage": "50mg", "frequency": "twice daily" }
-      ]
+      ],
+      "herbalRemedies": ["Guggul", "Arjuna"]
     }
   ]
 }
