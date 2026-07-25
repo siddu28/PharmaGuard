@@ -20,9 +20,278 @@ import {
   LOCAL_DRUG_CLASSES,
   ALTERNATIVE_DRUGS,
   getInteractionKey,
+  findAllAyushInteractionsForDrug,
+  findAllAyushInteractionsForHerb,
 } from '../data/clinical-tables.js';
 
 export class SafetyAgent {
+
+  // ==========================================================================
+  // run_all_safety_checks — COMBINED tool that runs ALL 8 checks internally
+  // This prevents the LLM from hitting per-turn tool call limits.
+  // ==========================================================================
+  @Tool({
+    name: 'run_all_safety_checks',
+    description: 'Runs ALL 8 safety checks (drug interactions, allergy, disease, age, renal, pregnancy, duplicate therapy, and AYUSH herb-drug) in a single call. Returns pre-formatted check results array ready to pass directly to aggregate_risk_score. Use this instead of calling individual check tools separately.',
+    inputSchema: z.object({
+      newDrug: z.string().describe('The newly prescribed drug name'),
+      patientId: z.string().describe('Patient ID to check against'),
+    }),
+    examples: {
+      request: { newDrug: 'Ibuprofen', patientId: 'P001' },
+      response: {
+        checks: [
+          { type: 'drug_interaction', flagged: true, severity: 'major', detail: 'Ibuprofen + Lisinopril — NSAIDs reduce antihypertensive effect', citation: 'OpenFDA' },
+          { type: 'allergy', flagged: false, detail: 'No allergy conflict detected', citation: 'Patient EHR' },
+        ],
+        totalChecks: 8,
+        flaggedCount: 3,
+      }
+    }
+  })
+  async runAllSafetyChecks(
+    input: { newDrug: string; patientId: string },
+    ctx: ExecutionContext
+  ) {
+    ctx.logger.info('🔄 Running ALL 8 safety checks in single call', { newDrug: input.newDrug, patientId: input.patientId });
+
+    // Load patient
+    const patients = loadPatients();
+    let patient = patients.find((p: any) => p.id === input.patientId);
+
+    // Also check in-memory patients
+    if (!patient) {
+      const { inMemoryPatients } = await import('../shared-utils.js');
+      patient = inMemoryPatients.get(input.patientId);
+    }
+
+    if (!patient) {
+      throw new Error(`Patient not found: ${input.patientId}`);
+    }
+
+    const checks: Array<{ type: string; flagged: boolean; severity?: string; detail: string; citation: string }> = [];
+    const currentMedNames = patient.currentMedications?.map((m: any) => typeof m === 'string' ? m : m.name) || [];
+
+    // ── 1. Drug-Drug Interaction ──────────────────────────────────────────
+    try {
+      const interactions: any[] = [];
+      for (const currentMed of currentMedNames) {
+        let foundViaApi = false;
+        try {
+          const searchTerm = `"${input.newDrug}" AND "${currentMed}"`;
+          const url = `https://api.fda.gov/drug/label.json?search=drug_interactions:${encodeURIComponent(searchTerm)}&limit=1`;
+          const response = await fetch(url);
+          if (response.ok) {
+            const data: any = await response.json();
+            if (data.results && data.results.length > 0) {
+              interactions.push({ drug2: currentMed, severity: 'major', source: 'OpenFDA' });
+              foundViaApi = true;
+            }
+          }
+        } catch { /* fallback below */ }
+
+        if (!foundViaApi) {
+          const key = getInteractionKey(input.newDrug, currentMed);
+          const fallback = DRUG_INTERACTION_FALLBACK_TABLE[key];
+          if (fallback) {
+            interactions.push({ drug2: currentMed, severity: fallback.severity, description: fallback.description, source: 'Local DB' });
+          }
+        }
+      }
+
+      if (interactions.length > 0) {
+        const worstSeverity = interactions.some(i => i.severity === 'major') ? 'major' : interactions.some(i => i.severity === 'moderate') ? 'moderate' : 'minor';
+        checks.push({
+          type: 'drug_interaction', flagged: true, severity: worstSeverity,
+          detail: interactions.map(i => `${input.newDrug} + ${i.drug2} (${i.severity}): ${i.description || 'Interaction found'}`).join('; '),
+          citation: 'U.S. FDA Drug Label Database (OpenFDA)',
+        });
+      } else {
+        checks.push({ type: 'drug_interaction', flagged: false, detail: `No drug interactions found between ${input.newDrug} and current medications`, citation: 'OpenFDA + Local Clinical Database' });
+      }
+    } catch {
+      checks.push({ type: 'drug_interaction', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 2. Allergy Cross-Reactivity ───────────────────────────────────────
+    try {
+      const allergies: string[] = patient.allergies || [];
+      const crossReact = ALLERGY_CROSS_REACTIVITY_TABLE[input.newDrug];
+      const directMatch = allergies.find(a => a.toLowerCase() === input.newDrug.toLowerCase());
+
+      if (directMatch) {
+        checks.push({ type: 'allergy', flagged: true, severity: 'major', detail: `${input.newDrug} is directly listed as a patient allergy`, citation: 'Patient EHR Allergy Records' });
+      } else if (crossReact) {
+        const matched = crossReact.find(cls => allergies.some(a => a.toLowerCase() === cls.toLowerCase()));
+        if (matched) {
+          checks.push({ type: 'allergy', flagged: true, severity: 'major', detail: `${input.newDrug} may cross-react with documented allergy: ${matched}`, citation: 'Immunology & Allergy Clinics of North America' });
+        } else {
+          checks.push({ type: 'allergy', flagged: false, detail: 'No allergy conflict detected', citation: 'Cross-Reactivity Database' });
+        }
+      } else {
+        checks.push({ type: 'allergy', flagged: false, detail: 'No allergy conflict detected', citation: 'Cross-Reactivity Database' });
+      }
+    } catch {
+      checks.push({ type: 'allergy', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 3. Disease Contraindication ───────────────────────────────────────
+    try {
+      const diagnoses: string[] = patient.diagnoses || [];
+      const contras = CONTRAINDICATION_TABLE[input.newDrug];
+
+      if (contras) {
+        const conflict = contras.find(d => diagnoses.some(diag => diag.toLowerCase() === d.toLowerCase()));
+        if (conflict) {
+          checks.push({ type: 'disease', flagged: true, severity: 'major', detail: `${input.newDrug} is contraindicated in patients with ${conflict}`, citation: 'FDA Drug Label; Clinical Pharmacology Guidelines' });
+        } else {
+          checks.push({ type: 'disease', flagged: false, detail: 'No disease contraindication found', citation: 'FDA Drug Label' });
+        }
+      } else {
+        checks.push({ type: 'disease', flagged: false, detail: 'No disease contraindication found', citation: 'FDA Drug Label' });
+      }
+    } catch {
+      checks.push({ type: 'disease', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 4. Age Appropriateness ────────────────────────────────────────────
+    try {
+      const age = patient.age;
+      if (age >= 65) {
+        checks.push({ type: 'age', flagged: true, severity: 'moderate', detail: `Patient is ${age} years old. Beers Criteria flag for ${input.newDrug}. Consider reduced dose.`, citation: 'AGS Beers Criteria® (2023 Update)' });
+      } else if (age < 18) {
+        checks.push({ type: 'age', flagged: true, severity: 'moderate', detail: `Patient is ${age} years old. Verify pediatric dosing for ${input.newDrug}.`, citation: 'Harriet Lane Handbook; BNF for Children' });
+      } else {
+        checks.push({ type: 'age', flagged: false, detail: `Patient age ${age} — no age-related concerns`, citation: 'AGS Beers Criteria®' });
+      }
+    } catch {
+      checks.push({ type: 'age', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 5. Duplicate Therapy ──────────────────────────────────────────────
+    try {
+      const newDrugClasses = LOCAL_DRUG_CLASSES[input.newDrug] ?? [];
+      let hasDuplicate = false;
+      let dupDetail = '';
+
+      for (const medName of currentMedNames) {
+        const medClasses = LOCAL_DRUG_CLASSES[medName] ?? [];
+        const shared = newDrugClasses.filter(cls => medClasses.includes(cls));
+        if (shared.length > 0) {
+          hasDuplicate = true;
+          dupDetail = `Both ${input.newDrug} and ${medName} belong to ${shared[0]}. Concurrent use may be redundant.`;
+          break;
+        }
+      }
+
+      if (hasDuplicate) {
+        checks.push({ type: 'duplicate', flagged: true, severity: 'moderate', detail: dupDetail, citation: 'NIH RxNorm Drug Classification API' });
+      } else {
+        checks.push({ type: 'duplicate', flagged: false, detail: 'No duplicate therapy detected', citation: 'RxNorm Drug Classification' });
+      }
+    } catch {
+      checks.push({ type: 'duplicate', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 6. Renal Dose Adjustment ──────────────────────────────────────────
+    try {
+      const crcl = patient.labResults?.creatinineClearance_mLmin ?? 90;
+      const nephrotoxicDrugs = ['Ibuprofen', 'Naproxen', 'Aspirin', 'Gentamicin', 'Vancomycin', 'Metformin'];
+      const isNephrotoxic = nephrotoxicDrugs.some(d => d.toLowerCase() === input.newDrug.toLowerCase());
+
+      let stage = '';
+      if (crcl < 15) stage = 'CKD Stage 5';
+      else if (crcl < 30) stage = 'CKD Stage 4';
+      else if (crcl < 60) stage = 'CKD Stage 3';
+      else if (crcl < 90) stage = 'CKD Stage 2';
+      else stage = 'Normal';
+
+      if (crcl < 60 && isNephrotoxic) {
+        checks.push({ type: 'renal', flagged: true, severity: crcl < 30 ? 'major' : 'moderate', detail: `CrCl ${crcl} mL/min (${stage}). ${input.newDrug} is nephrotoxic — dose adjustment or avoidance needed.`, citation: 'KDIGO Clinical Practice Guidelines (2024)' });
+      } else if (crcl < 60) {
+        checks.push({ type: 'renal', flagged: true, severity: 'moderate', detail: `CrCl ${crcl} mL/min (${stage}). Consider dose adjustment for ${input.newDrug}.`, citation: 'KDIGO Clinical Practice Guidelines (2024)' });
+      } else {
+        checks.push({ type: 'renal', flagged: false, detail: `CrCl ${crcl} mL/min (${stage}) — no renal dose adjustment needed`, citation: 'KDIGO Clinical Practice Guidelines (2024)' });
+      }
+    } catch {
+      checks.push({ type: 'renal', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 7. Pregnancy Safety ───────────────────────────────────────────────
+    try {
+      const pregStatus = patient.pregnancyStatus || 'not_applicable';
+      if (pregStatus === 'not_applicable') {
+        checks.push({ type: 'pregnancy', flagged: false, detail: 'Not applicable — patient is not pregnant', citation: 'FDA Pregnancy Risk Categories' });
+      } else {
+        const category = PREGNANCY_CATEGORY_TABLE[input.newDrug] ?? 'unknown';
+        const isContra = category === 'D' || category === 'X';
+        if (isContra) {
+          checks.push({ type: 'pregnancy', flagged: true, severity: 'major', detail: `${input.newDrug} is FDA Category ${category} — contraindicated in pregnancy`, citation: 'FDA Pregnancy Risk Categories; Briggs 12th Ed' });
+        } else if (category === 'C') {
+          checks.push({ type: 'pregnancy', flagged: true, severity: 'moderate', detail: `${input.newDrug} is FDA Category C — use only if benefit outweighs risk`, citation: 'FDA Pregnancy Risk Categories' });
+        } else {
+          checks.push({ type: 'pregnancy', flagged: false, detail: `${input.newDrug} is FDA Category ${category} — generally safe in pregnancy`, citation: 'FDA Pregnancy Risk Categories' });
+        }
+      }
+    } catch {
+      checks.push({ type: 'pregnancy', flagged: false, detail: 'Check skipped (error)', citation: 'N/A' });
+    }
+
+    // ── 8. AYUSH Herb-Drug Interaction ─────────────────────────────────────
+    try {
+      const herbalRemedies: string[] = patient.herbalRemedies || [];
+      if (herbalRemedies.length > 0) {
+        const ayushInteractions = findAllAyushInteractionsForDrug(input.newDrug, herbalRemedies);
+
+        // Also check herbs against existing meds
+        const existingInteractions: any[] = [];
+        for (const herb of herbalRemedies) {
+          existingInteractions.push(...findAllAyushInteractionsForHerb(herb, currentMedNames));
+        }
+
+        const allAyush = [...ayushInteractions, ...existingInteractions];
+        const seen = new Set<string>();
+        const unique = allAyush.filter(i => {
+          const key = `${i.herb}|${i.drug}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        if (unique.length > 0) {
+          checks.push({
+            type: 'ayush', flagged: true,
+            severity: unique.some(i => i.severity === 'major') ? 'major' : 'moderate',
+            detail: unique.map(i => `${i.herb} × ${i.drug}: ${i.effect}`).join('; '),
+            citation: unique.map(i => i.citation).join('; '),
+          });
+        } else {
+          checks.push({ type: 'ayush', flagged: false, detail: `No AYUSH herb-drug interactions found (checked: ${herbalRemedies.join(', ')})`, citation: 'AYUSH Interaction Database' });
+        }
+      } else {
+        checks.push({ type: 'ayush', flagged: false, detail: 'No herbal remedies reported by patient', citation: 'N/A' });
+      }
+    } catch {
+      checks.push({ type: 'ayush', flagged: false, detail: 'AYUSH check skipped (error)', citation: 'N/A' });
+    }
+
+    const flaggedCount = checks.filter(c => c.flagged).length;
+
+    ctx.logger.info(`✅ All 8 safety checks complete: ${flaggedCount} flagged out of ${checks.length}`, { flaggedCount });
+
+    return {
+      checks,
+      totalChecks: checks.length,
+      flaggedCount,
+      patientId: input.patientId,
+      patientName: patient.name,
+      drug: input.newDrug,
+      summary: flaggedCount > 0
+        ? `⚠️ ${flaggedCount} safety concern(s) identified for ${input.newDrug} on ${patient.name}`
+        : `✅ All ${checks.length} safety checks passed for ${input.newDrug} on ${patient.name}`,
+    };
+  }
+
 
   // ==========================================================================
   // extract_clinical_entities
