@@ -11,60 +11,12 @@ Medical errors kill **~98,000 people annually** in the US alone. Drug-drug inter
 
 **PharmaGuard** is an AI-powered MCP server that acts as a **real-time safety net** between the doctor's prescription intent and the patient. It intercepts natural language prescription requests, runs **7 parallel safety checks** across multiple clinical dimensions, and delivers a color-coded risk assessment with actionable alternatives.
 
----
 
 ## 🏗️ Multi-Agent Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     NitroStack Studio (Chat UI)                  │
-│                                                                  │
-│  Doctor: "Can I prescribe Ibuprofen 400mg for P001's headache?" │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ MCP Protocol (STDIO)
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    PharmaGuard MCP Server                        │
-│              ┌──── Multi-Agent Orchestration ────┐               │
-│              │                                   │               │
-│  ┌───────────▼───────────┐  ┌────────────────────▼───────────┐  │
-│  │  🏥 Patient Agent      │  │  🛡️ Safety Agent               │  │
-│  │                        │  │                                │  │
-│  │  • get_patient_profile │  │  • extract_clinical_entities   │  │
-│  │  • ingest_patient_     │  │  • check_drug_drug_interaction │  │
-│  │    record (file upload)│  │  • check_drug_allergy_conflict │  │
-│  │                        │  │  • check_disease_conflict      │  │
-│  │  2 tools               │  │  • check_age_appropriateness   │  │
-│  └────────────────────────┘  │  • check_renal_dose_adjustment │  │
-│                               │  • check_pregnancy_safety      │  │
-│  ┌────────────────────────┐  │  • check_duplicate_therapy     │  │
-│  │  🌿 AYUSH Agent  🇮🇳    │  │  • find_and_rank_alternatives │  │
-│  │                        │  │                                │  │
-│  │  • check_ayush_        │  │  9 tools                      │  │
-│  │    interaction          │  └────────────────────────────────┘  │
-│  │                        │                                      │
-│  │  1 tool (India-local)  │  ┌────────────────────────────────┐  │
-│  └────────────────────────┘  │  📊 Report Agent               │  │
-│                               │                                │  │
-│                               │  • aggregate_risk_score        │  │
-│                               │  • generate_doctor_report      │  │
-│                               │    ↳ @Widget('risk-dashboard') │  │
-│                               │                                │  │
-│                               │  2 tools                      │  │
-│                               └────────────────────────────────┘  │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                  Shared Clinical Data Layer                   │ │
-│  │  patients.json · clinical-tables.ts · AYUSH DB · 7 tables   │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│         │              │                         │               │
-│         ▼              ▼                         ▼               │
-│  ┌────────────┐  ┌───────────┐  ┌─────────────────────────────┐ │
-│  │ Gemini API │  │ OpenFDA   │  │       RxNorm (NIH)          │ │
-│  │ (LLM)      │  │ (Drug DB) │  │  (Drug Classification)     │ │
-│  └────────────┘  └───────────┘  └─────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+<img width="1693" height="929" alt="Image" src="https://github.com/user-attachments/assets/f6c04a4d-7f30-49a6-bde9-934f973b2ac7" />
+
 
 ---
 
