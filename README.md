@@ -11,11 +11,9 @@ Medical errors kill **~98,000 people annually** in the US alone. Drug-drug inter
 
 **PharmaGuard** is an AI-powered MCP server that acts as a **real-time safety net** between the doctor's prescription intent and the patient. It intercepts natural language prescription requests, runs **7 parallel safety checks** across multiple clinical dimensions, and delivers a color-coded risk assessment with actionable alternatives.
 
----
 
 ## 🏗️ Multi-Agent Architecture
 
-```
 
 <img width="1693" height="929" alt="Image" src="https://github.com/user-attachments/assets/f6c04a4d-7f30-49a6-bde9-934f973b2ac7" />
 
