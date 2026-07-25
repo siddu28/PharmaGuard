@@ -66,3 +66,4 @@ tokens.json
 .opencode/
 .ollama/
 .env
+.env.example/
