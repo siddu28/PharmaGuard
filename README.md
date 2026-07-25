@@ -11,6 +11,81 @@ Medical errors kill **~98,000 people annually** in the US alone. Drug-drug inter
 
 **PharmaGuard** is an AI-powered MCP server that acts as a **real-time safety net** between the doctor's prescription intent and the patient. It intercepts natural language prescription requests, runs **7 parallel safety checks** across multiple clinical dimensions, and delivers a color-coded risk assessment with actionable alternatives.
 
+flowchart TB
+    %% Client UI Layer
+    subgraph Studio ["NitroStack Studio (Chat UI)"]
+        Doctor["Doctor: 'Can I prescribe Ibuprofen 400mg for P001's headache?'"]
+    end
+
+    %% Main Server Container
+    subgraph Server ["PharmaGuard MCP Server"]
+        
+        %% Multi-Agent Orchestration Layer
+        subgraph Orchestration ["Multi-Agent Orchestration"]
+            
+            subgraph PatientAgent ["🏥 Patient Agent (2 tools)"]
+                direction TB
+                PA1["• get_patient_profile"]
+                PA2["• ingest_patient_record (file upload)"]
+            end
+
+            subgraph SafetyAgent ["🛡️ Safety Agent (9 tools)"]
+                direction TB
+                SA1["• extract_clinical_entities"]
+                SA2["• check_drug_drug_interaction"]
+                SA3["• check_drug_allergy_conflict"]
+                SA4["• check_disease_conflict"]
+                SA5["• check_age_appropriateness"]
+                SA6["• check_renal_dose_adjustment"]
+                SA7["• check_pregnancy_safety"]
+                SA8["• check_duplicate_therapy"]
+                SA9["• find_and_rank_alternatives"]
+            end
+
+            subgraph AyushAgent ["🌿 AYUSH Agent 🇮🇳 (1 tool)"]
+                direction TB
+                AY1["• check_ayush_interaction (India-local)"]
+            end
+
+            subgraph ReportAgent ["📊 Report Agent (2 tools)"]
+                direction TB
+                RA1["• aggregate_risk_score"]
+                RA2["• generate_doctor_report"]
+                Widget["↳ @Widget('risk-dashboard')"]
+                RA2 -.-> Widget
+            end
+        end
+
+        %% Data Layer
+        DataLayer["Shared Clinical Data Layer<br/>(patients.json · clinical-tables.ts · AYUSH DB · 7 tables)"]
+
+        %% External APIs & Foundation Models
+        subgraph External ["External Services & APIs"]
+            Gemini["Gemini API (LLM)"]
+            OpenFDA["OpenFDA (Drug DB)"]
+            RxNorm["RxNorm (NIH) (Drug Classification)"]
+        end
+    end
+
+    %% Flow Connections
+    Doctor -->|"MCP Protocol (STDIO)"| Orchestration
+    Orchestration --> DataLayer
+    DataLayer --> Gemini
+    DataLayer --> OpenFDA
+    DataLayer --> RxNorm
+
+    %% Styling
+    classDef agentStyle fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#fff
+    classDef dataStyle fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#fff
+    classDef externalStyle fill:#1e1b4b,stroke:#8b5cf6,stroke-width:2px,color:#fff
+    
+    class PatientAgent,SafetyAgent,AyushAgent,ReportAgent agentStyle
+    class DataLayer dataStyle
+    class Gemini,OpenFDA,RxNorm externalStyle
+
+
+
+
 ---
 
 ## 🏗️ Multi-Agent Architecture
