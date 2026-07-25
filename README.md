@@ -280,29 +280,7 @@ Renders inline when `aggregate_risk_score` is called. Shows an **animated step-b
 - Each block shows: tool name, agent name, pass/fail status, detail, and source citation
 - Judges see EXACTLY what the AI checked and why — **zero black box**
 
-```
-┌──────────────────────────────────────────────────┐
-│  🧠 AI THINKING TRACE                            │
-│  Multi-Agent Safety Pipeline                      │
-│                                                   │
-│  🏥 Patient Profile Loaded              🟢 PASSED │
-│  Safety Agent → get_patient_profile               │
-│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
-│  🛡️ Drug-Drug Interaction              🔴 MAJOR  │
-│  Safety Agent → check_drug_drug_interaction       │
-│  Ibuprofen + Lisinopril — reduces BP effect       │
-│  📎 U.S. FDA Drug Label Database (OpenFDA)        │
-│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
-│  🌿 AYUSH Herb-Drug Interaction        🟡 FLAGGED│
-│  AYUSH Agent → check_ayush_interaction            │
-│  Ashwagandha × Metformin — hypoglycemia risk      │
-│  📎 Indian Journal of Pharmacology, 2019          │
-│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          │
-│  📊 Risk Aggregation                   🔴 HIGH   │
-│  Report Agent → aggregate_risk_score              │
-│  3 concern(s) flagged → HIGH RISK                 │
-└──────────────────────────────────────────────────┘
-```
+<img width="1804" height="872" alt="Image" src="https://github.com/user-attachments/assets/9dc4a676-238c-462e-9be7-442a97f2d22a" />
 
 Both widgets use `@nitrostack/widgets` SDK:
 - `useWidgetSDK()` — Access tool output data
