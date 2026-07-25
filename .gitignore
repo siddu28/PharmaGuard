@@ -67,3 +67,7 @@ tokens.json
 .ollama/
 .env
 .env.example/
+
+# Added by nitrostack pack
+.git/
+my-server.zip
